@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import Head from "next/head";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -9,8 +9,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
 import { Toaster } from "@/components/ui/toaster";
-import { Upload, FileText, Download, CheckCircle, AlertCircle } from "lucide-react";
+import { Upload, FileText, Download, CheckCircle, AlertCircle, ZoomIn, ZoomOut } from "lucide-react";
 import { PDFDocument, PDFForm, PDFTextField, PDFCheckBox, PDFRadioGroup } from "pdf-lib";
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
+import 'react-pdf/dist/esm/Page/TextLayer.css';
+
+// Set up PDF.js worker
+if (typeof window !== 'undefined') {
+  pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+}
 
 interface FormField {
   name: string;
@@ -29,6 +37,10 @@ interface ProcessingStep {
 export default function Home() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [pdfDoc, setPdfDoc] = useState<PDFDocument | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [numPages, setNumPages] = useState<number>(0);
+  const [pageNumber, setPageNumber] = useState<number>(1);
+  const [scale, setScale] = useState<number>(0.8);
   const [formFields, setFormFields] = useState<FormField[]>([]);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [currentStep, setCurrentStep] = useState<'upload' | 'fill' | 'download'>('upload');
@@ -39,6 +51,22 @@ export default function Home() {
     { id: 'prepare', title: 'Preparing form interface', completed: false }
   ]);
   const { toast } = useToast();
+
+  // PDF preview handlers
+  const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
+    setNumPages(numPages);
+    setPageNumber(1);
+  };
+
+  const changePage = (offset: number) => {
+    setPageNumber(prevPageNumber => prevPageNumber + offset);
+  };
+
+  const previousPage = () => changePage(-1);
+  const nextPage = () => changePage(1);
+
+  const zoomIn = () => setScale(prev => Math.min(prev + 0.2, 2));
+  const zoomOut = () => setScale(prev => Math.max(prev - 0.2, 0.4));
 
   const updateProcessingStep = (stepId: string, completed: boolean) => {
     setProcessingSteps(prev => 
@@ -61,6 +89,10 @@ export default function Home() {
 
     setPdfFile(file);
     setIsProcessing(true);
+    
+    // Create URL for PDF preview
+    const fileUrl = URL.createObjectURL(file);
+    setPdfUrl(fileUrl);
     
     try {
       // Step 1: Parse PDF
@@ -207,11 +239,27 @@ export default function Home() {
   const resetApp = () => {
     setPdfFile(null);
     setPdfDoc(null);
+    if (pdfUrl) {
+      URL.revokeObjectURL(pdfUrl);
+    }
+    setPdfUrl(null);
+    setNumPages(0);
+    setPageNumber(1);
+    setScale(0.8);
     setFormFields([]);
     setFormData({});
     setCurrentStep('upload');
     setProcessingSteps(prev => prev.map(step => ({ ...step, completed: false })));
   };
+
+  // Cleanup PDF URL on unmount
+  useEffect(() => {
+    return () => {
+      if (pdfUrl) {
+        URL.revokeObjectURL(pdfUrl);
+      }
+    };
+  }, [pdfUrl]);
 
   const renderFormField = (field: FormField) => {
     switch (field.type) {
@@ -489,19 +537,84 @@ export default function Home() {
                     >
                       <Card>
                         <CardHeader>
-                          <CardTitle>PDF Preview</CardTitle>
+                          <CardTitle className="flex items-center justify-between">
+                            <span>PDF Preview</span>
+                            <div className="flex items-center space-x-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={zoomOut}
+                                disabled={scale <= 0.4}
+                              >
+                                <ZoomOut className="w-4 h-4" />
+                              </Button>
+                              <span className="text-sm text-muted-foreground">
+                                {Math.round(scale * 100)}%
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={zoomIn}
+                                disabled={scale >= 2}
+                              >
+                                <ZoomIn className="w-4 h-4" />
+                              </Button>
+                            </div>
+                          </CardTitle>
                           <CardDescription>
-                            Your original PDF document
+                            Your original PDF document - Page {pageNumber} of {numPages}
                           </CardDescription>
                         </CardHeader>
                         <CardContent>
-                          <div className="aspect-[3/4] bg-muted rounded-lg flex items-center justify-center">
-                            <div className="text-center">
-                              <FileText className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-                              <p className="text-muted-foreground">
-                                {pdfFile?.name}
-                              </p>
-                            </div>
+                          <div className="bg-muted rounded-lg overflow-hidden">
+                            {pdfUrl ? (
+                              <div className="flex flex-col items-center">
+                                <Document
+                                  file={pdfUrl}
+                                  onLoadSuccess={onDocumentLoadSuccess}
+                                  className="flex justify-center"
+                                >
+                                  <Page
+                                    pageNumber={pageNumber}
+                                    scale={scale}
+                                    className="border border-border rounded"
+                                  />
+                                </Document>
+                                
+                                {numPages > 1 && (
+                                  <div className="flex items-center justify-center space-x-4 mt-4 p-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={previousPage}
+                                      disabled={pageNumber <= 1}
+                                    >
+                                      Previous
+                                    </Button>
+                                    <span className="text-sm text-muted-foreground">
+                                      Page {pageNumber} of {numPages}
+                                    </span>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={nextPage}
+                                      disabled={pageNumber >= numPages}
+                                    >
+                                      Next
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="aspect-[3/4] flex items-center justify-center">
+                                <div className="text-center">
+                                  <FileText className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+                                  <p className="text-muted-foreground">
+                                    {pdfFile?.name || 'No PDF loaded'}
+                                  </p>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </CardContent>
                       </Card>
